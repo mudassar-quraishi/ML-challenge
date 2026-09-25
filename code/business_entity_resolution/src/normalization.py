@@ -103,6 +103,13 @@ def normalize_business_name(name: str) -> str:
             text = re.sub(pattern, standard, text).strip()
             break
             
+    # 7. Normalize legal prefixes at start of name (e.g. 'llc keytoen' -> 'keytoen', 'sci ptit' -> 'ptit')
+    for suffix in LEGAL_SUFFIX_MAP.keys():
+        pattern = r"^" + re.escape(suffix) + r"\b"
+        if re.search(pattern, text):
+            text = re.sub(pattern, "", text).strip()
+            break
+            
     return text
 
 

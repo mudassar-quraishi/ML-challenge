@@ -84,6 +84,13 @@ def parse_args():
         default=-1,
         help="Number of CPU cores for training and scoring (-1 for all cores)"
     )
+    parser.add_argument(
+        "--blocking-mode",
+        type=str,
+        default="multimodal",
+        choices=["baseline", "multimodal"],
+        help="Blocking strategy: 'baseline' (Phase 1) or 'multimodal' (Phase 3 multi-modal union)"
+    )
     return parser.parse_args()
 
 
@@ -99,6 +106,7 @@ def main():
         CACHE_DIR=args.cache_dir,
         LOCAL_SMOKE_TEST=args.smoke_test,
         SMOKE_SAMPLE_SIZE=args.smoke_sample_size,
+        BLOCKING_MODE=args.blocking_mode,
         N_JOBS=args.n_jobs
     )
     

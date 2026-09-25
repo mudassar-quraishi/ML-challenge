@@ -40,9 +40,13 @@ class PipelineConfig:
     N_JOBS: int = int(os.getenv("N_JOBS", "-1"))
     
     # Blocking parameters
-    BLOCKING_MAX_CANDIDATES: int = int(os.getenv("BLOCKING_MAX_CANDIDATES", "60"))
+    BLOCKING_MODE: str = os.getenv("BLOCKING_MODE", "multimodal")  # "baseline" or "multimodal"
+    BLOCKING_MAX_CANDIDATES: int = int(os.getenv("BLOCKING_MAX_CANDIDATES", "65"))
     NAME_TFIDF_MIN_SIM: float = float(os.getenv("NAME_TFIDF_MIN_SIM", "0.45"))
     MIN_TOKEN_LEN: int = 3
+    SMOKE_TOKEN_DOC_FREQ: int = int(os.getenv("SMOKE_TOKEN_DOC_FREQ", "50"))
+    MAX_TOKEN_DOC_FREQ: int = int(os.getenv("MAX_TOKEN_DOC_FREQ", "3000"))
+    CORPUS_RELATIVE_CAP: float = float(os.getenv("CORPUS_RELATIVE_CAP", "0.005"))
     
     # Model & Calibration parameters
     CALIBRATED_THRESHOLD: float = float(os.getenv("CALIBRATED_THRESHOLD", "0.50"))
