@@ -17,6 +17,7 @@
 | **EXP-004** *(Phase 3 Scaling 5,000 S1)* | 2026-09-25 | MultiModal Production on 5,000 S1 entities (47,362 targets) | **95.63%** | 224,181 | 44.8 | 65.0 | 99.91% | **0.9622** | 0.9764 | 0.9354 | 0.55 | <750 MB | 59.15s | End-to-end training & validation on 5,000 S1 sample. 16,604/17,362 true matches retained. High precision (0.9764) and F0.5 (0.9622). Validator PASS. |
 | **EXP-005** *(Phase 3 Scaling 10,000 S1)* | 2026-09-25 | MultiModal Production on 10,000 S1 entities (94,752 targets) | **93.54%** | 518,731 | 51.9 | 65.0 | 99.95% | — | — | — | — | 598.6 MB | 358.0s | Scaling stress-test on 10,000 S1 and 94,752 targets. 32,506/34,752 true matches captured. 99.95% reduction ratio. Memory strictly controlled at 598 MB. |
 | **EXP-006** *(Phase 3.5 Scaling Diagnosis)* | 2026-09-26 | Empirical diagnosis of candidate pruning vs retrieval failure on 5k and 10k S1 | **97.57% (Uncapped)** / **94.81% (Tiered 65)** / 93.57% (Flat 65) | 518,718 | 51.9 | 65.0 | 99.95% | — | — | — | — | 1,105 MB | 636.6s | Verified that 62.3% of lost matches at 10k S1 are caused by cap truncation, not blocker failure. Tiered retention boosts recall to 94.81% at cap 65 without volume increase. |
+| **EXP-007** *(Phase 3.75 Policy Lock)* | 2026-09-26 | Systematic benchmark of 8 retention policies (Flat vs Tiered across 65, 85, 100, 150) + LightGBM on 10k S1 | **94.96%** (Tiered 85) | 626,076 | 62.6 | 85.0 | 99.93% | **0.9549** | 0.9711 | 0.9249 | 0.60 | 1,530 MB | 1,148s | Locked Tiered 85 as production candidate policy. Tiered strictly dominates flat (+0.0058 F0.5). High singleton accuracy (98.37%). Stable at 5k S1 (0.9715 F0.5). |
 
 ---
 
@@ -97,3 +98,23 @@
     - Tiered Cap 65: **94.81% recall** (+1.24% recall over flat cap 65, exact same candidate volume of 51.9/S1)
     - Tiered Cap 100: **95.24% recall**
     - Tiered Cap 150: **95.78% recall**
+
+### EXP-007: Phase 3.75 Candidate Retention Policy Benchmark & Lock
+- **Commit / Tag**: `phase3.75-candidate-policy`
+- **Objective**: Empirically evaluate and lock candidate retention strategy across 8 configurations (Flat vs Tiered across 65, 85, 100, 150) using both blocking metrics and downstream LightGBM model performance.
+- **10,000 S1 Benchmark Results (94,752 targets, 34,752 true matches)**:
+  - Flat 65: 93.50% recall, 51.9 cands/S1, Val F0.5 = 0.9475, Prec = 0.9671, Rec = 0.9114, SnglAcc = 97.56%, Thresh = 0.60
+  - **Tiered 65**: **94.71% recall**, 51.9 cands/S1, Val F0.5 = **0.9536**, Prec = 0.9705, Rec = 0.9225, SnglAcc = 97.56%, Thresh = 0.60
+  - Flat 85: 93.90% recall, 62.6 cands/S1, Val F0.5 = 0.9491, Prec = 0.9695, Rec = 0.9112, SnglAcc = 98.37%, Thresh = 0.65
+  - **Tiered 85**: **94.96% recall**, 62.6 cands/S1, Val F0.5 = **0.9549**, Prec = 0.9711, Rec = 0.9249, SnglAcc = 98.37%, Thresh = 0.60
+  - Flat 100: 94.19% recall, 69.5 cands/S1, Val F0.5 = 0.9489, Prec = 0.9671, Rec = 0.9166, SnglAcc = 95.93%, Thresh = 0.55
+  - **Tiered 100**: **95.15% recall**, 69.5 cands/S1, Val F0.5 = **0.9550**, Prec = 0.9759, Rec = 0.9120, SnglAcc = 99.19%, Thresh = 0.80
+  - Flat 150: 94.96% recall, 87.1 cands/S1, Val F0.5 = 0.9530, Prec = 0.9712, Rec = 0.9166, SnglAcc = 96.75%, Thresh = 0.70
+  - **Tiered 150**: **95.67% recall**, 87.1 cands/S1, Val F0.5 = **0.9583**, Prec = 0.9738, Rec = 0.9274, SnglAcc = 96.75%, Thresh = 0.65
+- **5,000 S1 Stress Test Results (47,362 targets, 17,362 true matches)**:
+  - Tiered 65: 96.28% recall, 44.8 cands/S1, Val F0.5 = **0.9689**, Prec = 0.9841, Rec = 0.9382, SnglAcc = 98.15%, Thresh = 0.70
+  - Tiered 85: 96.64% recall, 51.6 cands/S1, Val F0.5 = **0.9715**, Prec = 0.9862, Rec = 0.9420, SnglAcc = 98.15%, Thresh = 0.70
+  - Tiered 100: 96.85% recall, 55.5 cands/S1, Val F0.5 = **0.9740**, Prec = 0.9878, Rec = 0.9462, SnglAcc = 98.15%, Thresh = 0.65
+- **Decision & Production Lock**:
+  - **Locked Policy**: **Tiered 85** (`BLOCKING_RETENTION_POLICY="tiered"`, `BLOCKING_MAX_CANDIDATES=85`).
+  - **Rationale**: Tiered strictly beats Flat across all caps. Tiered 85 matches Tiered 100 in F0.5 (0.9549 vs 0.9550) with 11% fewer candidate pairs (saving 12M pairs on test set), maintains 98.37% singleton accuracy, and scales robustly to 5k S1 (0.9715 F0.5).

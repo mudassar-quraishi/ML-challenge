@@ -41,7 +41,8 @@ class PipelineConfig:
     
     # Blocking parameters
     BLOCKING_MODE: str = os.getenv("BLOCKING_MODE", "multimodal")  # "baseline" or "multimodal"
-    BLOCKING_MAX_CANDIDATES: int = int(os.getenv("BLOCKING_MAX_CANDIDATES", "65"))
+    BLOCKING_RETENTION_POLICY: str = os.getenv("BLOCKING_RETENTION_POLICY", "tiered")  # "flat" or "tiered"
+    BLOCKING_MAX_CANDIDATES: int = int(os.getenv("BLOCKING_MAX_CANDIDATES", "85"))
     NAME_TFIDF_MIN_SIM: float = float(os.getenv("NAME_TFIDF_MIN_SIM", "0.45"))
     MIN_TOKEN_LEN: int = 3
     SMOKE_TOKEN_DOC_FREQ: int = int(os.getenv("SMOKE_TOKEN_DOC_FREQ", "50"))

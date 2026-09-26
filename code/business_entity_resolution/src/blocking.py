@@ -158,6 +158,7 @@ class MultiModalCandidateBlocker:
     def __init__(self, config: PipelineConfig):
         self.config = config
         self.max_candidates = config.BLOCKING_MAX_CANDIDATES
+        self.retention_policy = getattr(config, "BLOCKING_RETENTION_POLICY", "flat").lower()
         
         # Sub-indexes
         self.exact_name_index = defaultdict(list)
@@ -300,11 +301,13 @@ class MultiModalCandidateBlocker:
                 digits = row.get("address_digits", [])
                 
                 combined_cands = Counter()
+                cand_modalities = defaultdict(set)
                 
                 # --- Strategy A: Exact Normalized Name ---
                 if name and name in self.exact_name_index:
                     for tid in self.exact_name_index[name]:
                         combined_cands[tid] += 50.0
+                        cand_modalities[tid].add("exact_name")
                         
                 # --- Strategy B: Rare Name Tokens ---
                 tokens = [t for t in set(name.split()) if len(t) >= self.config.MIN_TOKEN_LEN and t not in COMMON_STOP_TOKENS]
@@ -314,6 +317,7 @@ class MultiModalCandidateBlocker:
                         w = 1.0 + (10.0 / (len(postings) + 1))
                         for tid in postings:
                             combined_cands[tid] += w
+                            cand_modalities[tid].add("rare_token")
                             
                 # --- Strategy C: Char 3-Gram Cosine Nearest Neighbors ---
                 row_vec = sim_matrix[offset]
@@ -324,12 +328,14 @@ class MultiModalCandidateBlocker:
                         score = float(row_vec.data[idx])
                         tid = self.target_ids[col_idx]
                         combined_cands[tid] += (score * 15.0)
+                        cand_modalities[tid].add("char_3gram")
                         
                 # --- Strategy D: Domain / Handle Stripped Brand Matching ---
                 core_brand = extract_core_brand(raw_name)
                 if len(core_brand) >= 4 and core_brand in self.brand_clean_index:
                     for tid in self.brand_clean_index[core_brand]:
                         combined_cands[tid] += 25.0
+                        cand_modalities[tid].add("domain_brand")
                         
                 # --- Strategy E: Address Digits & Compound 2-Digit Keys ---
                 for d in digits[:3]:
@@ -338,6 +344,7 @@ class MultiModalCandidateBlocker:
                         w = 2.0 + (5.0 / (len(postings) + 1))
                         for tid in postings:
                             combined_cands[tid] += w
+                            cand_modalities[tid].add("address_digits")
                             
                 addr_tokens = [t for t in set(addr.split()) if len(t) >= 4 and t not in ADDRESS_STOP_TOKENS]
                 for d in digits:
@@ -350,6 +357,7 @@ class MultiModalCandidateBlocker:
                                     w = 3.0 + (5.0 / (len(postings) + 1))
                                     for tid in postings:
                                         combined_cands[tid] += w
+                                        cand_modalities[tid].add("compound_digits")
                                         
                 # --- Strategy F: Informative Address Tokens (>= 2 Token Overlaps) ---
                 addr_cand_counts = Counter()
@@ -360,11 +368,35 @@ class MultiModalCandidateBlocker:
                 for tid, count in addr_cand_counts.items():
                     if count >= 2:
                         combined_cands[tid] += (count * 2.5)
+                        cand_modalities[tid].add("address_tokens")
                         
-                # Select top-K candidates
+                # Select candidates according to configured retention policy
                 if not combined_cands:
                     candidates_map[s1_id] = []
+                elif self.retention_policy == "tiered":
+                    tier1 = []
+                    tier2 = []
+                    for cid, score in combined_cands.most_common():
+                        m = cand_modalities[cid]
+                        # Tier 1: exact name, domain/brand, compound digits, multi-modality consensus, or confidence >= 15
+                        if (
+                            "exact_name" in m
+                            or "domain_brand" in m
+                            or "compound_digits" in m
+                            or len(m) >= 2
+                            or score >= 15.0
+                        ):
+                            tier1.append(cid)
+                        else:
+                            tier2.append(cid)
+                    
+                    selected = tier1[:self.max_candidates]
+                    remaining_slots = self.max_candidates - len(selected)
+                    if remaining_slots > 0:
+                        selected.extend(tier2[:remaining_slots])
+                    candidates_map[s1_id] = selected
                 else:
+                    # Flat retention: purely global top-K by combined score
                     candidates_map[s1_id] = [cid for cid, _ in combined_cands.most_common(self.max_candidates)]
                     
         return candidates_map
