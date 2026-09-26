@@ -16,6 +16,7 @@
 | **EXP-003** *(Phase 3 Production 500 S1)* | 2026-09-25 | MultiModal Production (A+B+C+D+E+F + Legal Prefix + Compound 2-Digits) | **99.16%** | 11,648 | 23.3 | 58.1 | 99.51% | **0.9805** | 0.9867 | 0.9625 | 0.30 | <380 MB | 21.17s | Dual-mode pipeline integrated into src/blocking.py. Legal prefix & 2-digit compound keys recovered 4 more matches (1,763/1,778). Validator PASS. |
 | **EXP-004** *(Phase 3 Scaling 5,000 S1)* | 2026-09-25 | MultiModal Production on 5,000 S1 entities (47,362 targets) | **95.63%** | 224,181 | 44.8 | 65.0 | 99.91% | **0.9622** | 0.9764 | 0.9354 | 0.55 | <750 MB | 59.15s | End-to-end training & validation on 5,000 S1 sample. 16,604/17,362 true matches retained. High precision (0.9764) and F0.5 (0.9622). Validator PASS. |
 | **EXP-005** *(Phase 3 Scaling 10,000 S1)* | 2026-09-25 | MultiModal Production on 10,000 S1 entities (94,752 targets) | **93.54%** | 518,731 | 51.9 | 65.0 | 99.95% | — | — | — | — | 598.6 MB | 358.0s | Scaling stress-test on 10,000 S1 and 94,752 targets. 32,506/34,752 true matches captured. 99.95% reduction ratio. Memory strictly controlled at 598 MB. |
+| **EXP-006** *(Phase 3.5 Scaling Diagnosis)* | 2026-09-26 | Empirical diagnosis of candidate pruning vs retrieval failure on 5k and 10k S1 | **97.57% (Uncapped)** / **94.81% (Tiered 65)** / 93.57% (Flat 65) | 518,718 | 51.9 | 65.0 | 99.95% | — | — | — | — | 1,105 MB | 636.6s | Verified that 62.3% of lost matches at 10k S1 are caused by cap truncation, not blocker failure. Tiered retention boosts recall to 94.81% at cap 65 without volume increase. |
 
 ---
 
@@ -64,3 +65,35 @@
   - Precision: 0.9730
   - Recall: 0.9127
 - **Validator Status**: `PASS`
+
+### EXP-006: Phase 3.5 Scaling Diagnosis & Candidate Pruning Audit
+- **Commit / Tag**: `phase3-baseline`
+- **Objective**: Determine whether recall decline across 500 S1 (99.16%) -> 5,000 S1 (95.63%) -> 10,000 S1 (93.54%) is driven by retrieval failure or candidate pruning.
+- **Empirical Findings**:
+  - **Raw Uncapped Blocker Recall**:
+    - 500 S1: **99.16%** (1,763 / 1,778)
+    - 5,000 S1: **98.15%** (17,040 / 17,362)
+    - 10,000 S1: **97.57%** (33,909 / 34,752)
+  - **Root Cause of Loss at Cap = 65 (10,000 S1)**:
+    - Never retrieved by any blocker (Category A): **843 (37.7%)**
+    - Retrieved by blockers, but discarded by cap = 65 (Category B): **1,391 (62.3%)**
+    - **Conclusion**: The degradation is predominantly caused by candidate truncation/pruning, NOT blocker retrieval failure!
+  - **Per-Blocker Modality Breakdown (10,000 S1, 34,752 matches)**:
+    - Exact Name: 28.61% standalone, 0 unique
+    - Rare Name Token: 55.91% standalone, 40 unique (0.12%)
+    - Char 3-Gram TF-IDF: 88.47% standalone, **1,766 unique (5.08%)**
+    - Domain / Brand: 23.98% standalone, 0 unique
+    - Address Digits (>=3): 53.71% standalone, **631 unique (1.82%)**
+    - Compound 2-Digit Keys: 15.10% standalone, **189 unique (0.54%)**
+    - Address Tokens (>=2): 53.32% standalone, **686 unique (1.97%)**
+  - **Cap Sweep on 10,000 S1**:
+    - Cap 50: 93.23% recall, 42.5 cands/S1, 99.955% red. ratio
+    - Cap 65: 93.57% recall, 51.9 cands/S1, 99.945% red. ratio
+    - Cap 100: 94.23% recall, 69.5 cands/S1, 99.927% red. ratio
+    - Cap 150: 95.03% recall, 87.1 cands/S1, 99.908% red. ratio
+    - Cap 250: 96.26% recall, 107.5 cands/S1, 99.887% red. ratio
+    - Uncapped: 97.57% recall, 122.2 cands/S1, 99.871% red. ratio
+  - **Tiered Candidate Policy (High confidence prioritized)**:
+    - Tiered Cap 65: **94.81% recall** (+1.24% recall over flat cap 65, exact same candidate volume of 51.9/S1)
+    - Tiered Cap 100: **95.24% recall**
+    - Tiered Cap 150: **95.78% recall**
