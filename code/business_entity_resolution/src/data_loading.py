@@ -60,7 +60,9 @@ def load_train_data(config: PipelineConfig) -> Tuple[pd.DataFrame, pd.DataFrame,
     s3_path = os.path.join(config.TRAIN_DIR, "train_source3.tsv")
     gt_path = os.path.join(config.TRAIN_DIR, "train_ground_truth.tsv")
 
-    if not config.LOCAL_SMOKE_TEST:
+    sample_size = config.SMOKE_SAMPLE_SIZE if config.LOCAL_SMOKE_TEST else getattr(config, "TRAIN_SAMPLE_SIZE", 25000)
+    
+    if not config.LOCAL_SMOKE_TEST and (sample_size is None or sample_size <= 0):
         print("[DataLoading] Loading FULL training dataset...")
         df_s1 = read_source_tsv(s1_path)
         df_s2 = read_source_tsv(s2_path)
@@ -69,9 +71,9 @@ def load_train_data(config: PipelineConfig) -> Tuple[pd.DataFrame, pd.DataFrame,
         print(f"[DataLoading] Full train loaded: S1={len(df_s1)}, S2={len(df_s2)}, S3={len(df_s3)}, GT={len(gt_map)}")
         return df_s1, df_s2, df_s3, gt_map
 
-    # Smoke test mode
-    print(f"[DataLoading] Smoke test enabled: Sampling {config.SMOKE_SAMPLE_SIZE} S1 entities...")
-    df_s1 = read_source_tsv(s1_path, nrows=config.SMOKE_SAMPLE_SIZE)
+    # Representative sample / Smoke test mode
+    print(f"[DataLoading] Sampling {sample_size:,} S1 entities for training...")
+    df_s1 = read_source_tsv(s1_path, nrows=sample_size)
     s1_ids = set(df_s1["entity_id"].values)
     gt_map = load_ground_truth_dict(gt_path, target_s1_ids=s1_ids)
     

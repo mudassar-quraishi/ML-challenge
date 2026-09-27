@@ -145,20 +145,23 @@ class BaselineCandidateBlocker:
 # =====================================================================
 
 class MultiModalCandidateBlocker:
-    """Phase 3 Production Multi-Modal Union Candidate Blocker.
+    """Phase 4 Production Multi-Modal Union Candidate Blocker.
     
     Combines:
     - Blocker A: Exact Normalized Name
-    - Blocker B: Rare Name Tokens (Inverted Index)
-    - Blocker C: Subword Character 3-Gram TF-IDF Cosine (Typo & Handle Resilience)
-    - Blocker D: Domain / Social Handle Stripped Brand Matching
+    - Blocker B: Rare Name Tokens (Inverted Index with Frequency Capping)
+    - Blocker C: Subword Character (2, 3)-Gram TF-IDF Cosine Nearest Neighbors
+    - Blocker D: URL / Domain / Social Handle Stripped Brand Matching
     - Blocker E: Address Digits (>= 3) & Compound 2-Digit Location Keys
+    - Enhancement D: Low-Collision Digits (len >= 2, postings <= 30) for Cross-Script Matches
     - Blocker F: Informative Address Tokens (>= 2 Overlaps)
+    - Enhancement E: Rare Locality Address Tokens (len >= 5, postings <= 20)
     """
     def __init__(self, config: PipelineConfig):
         self.config = config
         self.max_candidates = config.BLOCKING_MAX_CANDIDATES
-        self.retention_policy = getattr(config, "BLOCKING_RETENTION_POLICY", "flat").lower()
+        self.retention_policy = getattr(config, "BLOCKING_RETENTION_POLICY", "tiered").lower()
+        self.min_sim = getattr(config, "NAME_TFIDF_MIN_SIM", 0.40)
         
         # Sub-indexes
         self.exact_name_index = defaultdict(list)
@@ -166,10 +169,12 @@ class MultiModalCandidateBlocker:
         self.brand_clean_index = defaultdict(list)
         self.digit_index = defaultdict(list)
         self.compound_digit_index = defaultdict(list)
+        self.low_collision_digit_index = defaultdict(list)
+        self.rare_locality_token_index = defaultdict(list)
         self.address_token_index = defaultdict(list)
         
-        # TF-IDF Char 3-gram components
-        self.vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 3), min_df=2)
+        # TF-IDF Char (2, 3)-gram vectorizer
+        self.vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 3), min_df=2)
         self.target_char_matrix = None
         self.target_ids: List[str] = []
         
@@ -177,7 +182,7 @@ class MultiModalCandidateBlocker:
         self.target_records: Dict[str, dict] = {}
         
     def build_index(self, df_targets: pd.DataFrame):
-        print(f"[Blocking-MultiModal] Indexing {len(df_targets)} target records across 6 modalities...")
+        print(f"[Blocking-MultiModal] Indexing {len(df_targets)} target records across 8 enhanced modalities...")
         
         # 1. Determine frequency caps
         token_freq = Counter()
@@ -197,7 +202,7 @@ class MultiModalCandidateBlocker:
                 if len(t) >= 4 and t not in ADDRESS_STOP_TOKENS:
                     addr_token_freq[t] += 1
             for d in digits[:3]:
-                if len(d) >= 3:
+                if len(d) >= 2:
                     dig_freq[(d, country)] += 1
 
         name_cap = self.config.SMOKE_TOKEN_DOC_FREQ if self.config.LOCAL_SMOKE_TEST else min(
@@ -253,8 +258,13 @@ class MultiModalCandidateBlocker:
                 
             # Blocker E: Digits (>= 3)
             for d in digits[:3]:
-                if (d, country) in valid_digits:
+                if len(d) >= 3 and (d, country) in valid_digits:
                     self.digit_index[(d, country)].append(eid)
+                    
+            # Enhancement D: Low-Collision Digits (len >= 2) for cross-script retrieval
+            for d in digits:
+                if len(d) >= 2:
+                    self.low_collision_digit_index[(d, country)].append(eid)
                     
             # Compound 2-Digit Keys for Unit / Flat Numbers
             addr_distinct_tokens = [t for t in set(addr.split()) if len(t) >= 4 and t in valid_addr_tokens]
@@ -267,10 +277,15 @@ class MultiModalCandidateBlocker:
             for t in addr_distinct_tokens:
                 self.address_token_index[t].append(eid)
 
-        # 3. Fit Char 3-gram TF-IDF Matrix
-        print("[Blocking-MultiModal] Vectorizing subword character 3-grams for nearest neighbors...")
+            # Enhancement E: Rare Locality Tokens (len >= 5)
+            for t in set(addr.split()):
+                if len(t) >= 5 and t not in ADDRESS_STOP_TOKENS:
+                    self.rare_locality_token_index[(t, country)].append(eid)
+
+        # 3. Fit Subword Char (2, 3)-gram TF-IDF Matrix
+        print("[Blocking-MultiModal] Vectorizing subword character (2, 3)-grams for nearest neighbors...")
         self.target_char_matrix = self.vectorizer.fit_transform(names_list)
-        print("[Blocking-MultiModal] Multi-modal indexing complete.")
+        print(f"[Blocking-MultiModal] Multi-modal indexing complete. Vocab size: {self.target_char_matrix.shape[1]:,}")
 
     def generate_candidates(self, df_s1: pd.DataFrame) -> Dict[str, List[str]]:
         print(f"[Blocking-MultiModal] Generating candidates for {len(df_s1)} S1 entities...")
@@ -280,7 +295,9 @@ class MultiModalCandidateBlocker:
         s1_names = df_s1["norm_name"].fillna("").tolist()
         s1_char_matrix = self.vectorizer.transform(s1_names)
         
-        # Compute dot products in chunks to remain memory-safe
+        # Pre-convert S1 to records for O(1) dict access
+        s1_records = df_s1.to_dict(orient="records")
+        
         chunk_size = 500
         n_s1 = len(df_s1)
         
@@ -292,7 +309,7 @@ class MultiModalCandidateBlocker:
             sim_matrix = (chunk_s1_matrix * self.target_char_matrix.T).tocsr()
             
             for offset, s1_row_idx in enumerate(range(start_idx, end_idx)):
-                row = df_s1.iloc[s1_row_idx]
+                row = s1_records[s1_row_idx]
                 s1_id = row["entity_id"]
                 name = row["norm_name"]
                 raw_name = row["business_name"]
@@ -303,13 +320,13 @@ class MultiModalCandidateBlocker:
                 combined_cands = Counter()
                 cand_modalities = defaultdict(set)
                 
-                # --- Strategy A: Exact Normalized Name ---
+                # --- Modality A: Exact Normalized Name ---
                 if name and name in self.exact_name_index:
                     for tid in self.exact_name_index[name]:
                         combined_cands[tid] += 50.0
                         cand_modalities[tid].add("exact_name")
                         
-                # --- Strategy B: Rare Name Tokens ---
+                # --- Modality B: Rare Name Tokens ---
                 tokens = [t for t in set(name.split()) if len(t) >= self.config.MIN_TOKEN_LEN and t not in COMMON_STOP_TOKENS]
                 for t in tokens:
                     if t in self.token_index:
@@ -319,25 +336,25 @@ class MultiModalCandidateBlocker:
                             combined_cands[tid] += w
                             cand_modalities[tid].add("rare_token")
                             
-                # --- Strategy C: Char 3-Gram Cosine Nearest Neighbors ---
+                # --- Modality C: Subword Char (2, 3)-Gram Cosine Nearest Neighbors ---
                 row_vec = sim_matrix[offset]
                 if row_vec.nnz > 0:
-                    above_min = np.where(row_vec.data >= self.config.NAME_TFIDF_MIN_SIM)[0]
+                    above_min = np.where(row_vec.data >= self.min_sim)[0]
                     for idx in above_min:
                         col_idx = row_vec.indices[idx]
                         score = float(row_vec.data[idx])
                         tid = self.target_ids[col_idx]
                         combined_cands[tid] += (score * 15.0)
-                        cand_modalities[tid].add("char_3gram")
+                        cand_modalities[tid].add("char_ngram")
                         
-                # --- Strategy D: Domain / Handle Stripped Brand Matching ---
+                # --- Modality D: Domain / Handle Stripped Brand Matching ---
                 core_brand = extract_core_brand(raw_name)
                 if len(core_brand) >= 4 and core_brand in self.brand_clean_index:
                     for tid in self.brand_clean_index[core_brand]:
                         combined_cands[tid] += 25.0
                         cand_modalities[tid].add("domain_brand")
                         
-                # --- Strategy E: Address Digits & Compound 2-Digit Keys ---
+                # --- Modality E: Address Digits (len >= 3) ---
                 for d in digits[:3]:
                     if len(d) >= 3 and (d, country) in self.digit_index:
                         postings = self.digit_index[(d, country)]
@@ -346,6 +363,19 @@ class MultiModalCandidateBlocker:
                             combined_cands[tid] += w
                             cand_modalities[tid].add("address_digits")
                             
+                # --- Enhancement D: Low-Collision Digits (len >= 2, postings <= 30) ---
+                for d in digits:
+                    if len(d) >= 2:
+                        key = (d, country)
+                        if key in self.low_collision_digit_index:
+                            postings = self.low_collision_digit_index[key]
+                            if len(postings) <= 30:
+                                w = 3.0 + (5.0 / (len(postings) + 1))
+                                for tid in postings:
+                                    combined_cands[tid] += w
+                                    cand_modalities[tid].add("low_collision_digits")
+
+                # --- Compound 2-Digit Keys for Unit / Flat Numbers ---
                 addr_tokens = [t for t in set(addr.split()) if len(t) >= 4 and t not in ADDRESS_STOP_TOKENS]
                 for d in digits:
                     if len(d) == 2:
@@ -359,7 +389,7 @@ class MultiModalCandidateBlocker:
                                         combined_cands[tid] += w
                                         cand_modalities[tid].add("compound_digits")
                                         
-                # --- Strategy F: Informative Address Tokens (>= 2 Token Overlaps) ---
+                # --- Modality F: Informative Address Tokens (>= 2 Overlaps) ---
                 addr_cand_counts = Counter()
                 for tok in addr_tokens:
                     if tok in self.address_token_index:
@@ -370,6 +400,18 @@ class MultiModalCandidateBlocker:
                         combined_cands[tid] += (count * 2.5)
                         cand_modalities[tid].add("address_tokens")
                         
+                # --- Enhancement E: Rare Locality Tokens (len >= 5, postings <= 20) ---
+                locality_tokens = [t for t in set(addr.split()) if len(t) >= 5 and t not in ADDRESS_STOP_TOKENS]
+                for tok in locality_tokens:
+                    key = (tok, country)
+                    if key in self.rare_locality_token_index:
+                        postings = self.rare_locality_token_index[key]
+                        if len(postings) <= 20:
+                            w = 4.0 + (5.0 / (len(postings) + 1))
+                            for tid in postings:
+                                combined_cands[tid] += w
+                                cand_modalities[tid].add("rare_locality")
+
                 # Select candidates according to configured retention policy
                 if not combined_cands:
                     candidates_map[s1_id] = []
@@ -378,11 +420,12 @@ class MultiModalCandidateBlocker:
                     tier2 = []
                     for cid, score in combined_cands.most_common():
                         m = cand_modalities[cid]
-                        # Tier 1: exact name, domain/brand, compound digits, multi-modality consensus, or confidence >= 15
+                        # Tier 1: exact name, domain/brand, compound digits, rare locality, multi-modality consensus, or confidence >= 15
                         if (
                             "exact_name" in m
                             or "domain_brand" in m
                             or "compound_digits" in m
+                            or "rare_locality" in m
                             or len(m) >= 2
                             or score >= 15.0
                         ):
@@ -398,6 +441,8 @@ class MultiModalCandidateBlocker:
                 else:
                     # Flat retention: purely global top-K by combined score
                     candidates_map[s1_id] = [cid for cid, _ in combined_cands.most_common(self.max_candidates)]
+                    
+        return candidates_map
                     
         return candidates_map
 

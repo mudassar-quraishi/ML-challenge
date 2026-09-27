@@ -32,6 +32,7 @@ class PipelineConfig:
     # Execution modes
     LOCAL_SMOKE_TEST: bool = get_bool_env("LOCAL_SMOKE_TEST", False)
     SMOKE_SAMPLE_SIZE: int = int(os.getenv("SMOKE_SAMPLE_SIZE", "1000"))
+    TRAIN_SAMPLE_SIZE: int = int(os.getenv("TRAIN_SAMPLE_SIZE", "25000"))  # 0 or -1 for full train set
     
     # Random seed
     RANDOM_SEED: int = int(os.getenv("RANDOM_SEED", "42"))
@@ -42,8 +43,8 @@ class PipelineConfig:
     # Blocking parameters
     BLOCKING_MODE: str = os.getenv("BLOCKING_MODE", "multimodal")  # "baseline" or "multimodal"
     BLOCKING_RETENTION_POLICY: str = os.getenv("BLOCKING_RETENTION_POLICY", "tiered")  # "flat" or "tiered"
-    BLOCKING_MAX_CANDIDATES: int = int(os.getenv("BLOCKING_MAX_CANDIDATES", "85"))
-    NAME_TFIDF_MIN_SIM: float = float(os.getenv("NAME_TFIDF_MIN_SIM", "0.45"))
+    BLOCKING_MAX_CANDIDATES: int = int(os.getenv("BLOCKING_MAX_CANDIDATES", "65"))
+    NAME_TFIDF_MIN_SIM: float = float(os.getenv("NAME_TFIDF_MIN_SIM", "0.40"))
     MIN_TOKEN_LEN: int = 3
     SMOKE_TOKEN_DOC_FREQ: int = int(os.getenv("SMOKE_TOKEN_DOC_FREQ", "50"))
     MAX_TOKEN_DOC_FREQ: int = int(os.getenv("MAX_TOKEN_DOC_FREQ", "3000"))

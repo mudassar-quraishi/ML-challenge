@@ -43,6 +43,12 @@ def parse_args():
         help="Number of S1 entities to sample during smoke test (default: 1000)"
     )
     parser.add_argument(
+        "--train-sample-size",
+        type=int,
+        default=25000,
+        help="Number of S1 entities to sample for training LightGBM (default: 25000; 0 for full)"
+    )
+    parser.add_argument(
         "--data-root",
         type=str,
         default="dataset",
@@ -106,6 +112,7 @@ def main():
         CACHE_DIR=args.cache_dir,
         LOCAL_SMOKE_TEST=args.smoke_test,
         SMOKE_SAMPLE_SIZE=args.smoke_sample_size,
+        TRAIN_SAMPLE_SIZE=args.train_sample_size,
         BLOCKING_MODE=args.blocking_mode,
         N_JOBS=args.n_jobs
     )

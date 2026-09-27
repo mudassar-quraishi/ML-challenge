@@ -16,7 +16,7 @@ from .data_loading import load_train_data, load_test_data
 from .normalization import normalize_dataframe
 from .blocking import CandidateBlocker, evaluate_blocking
 from .train import train_matching_model
-from .predict import run_batch_inference
+from .predict import run_batch_inference, stream_chunked_test_inference
 from .make_submission import write_submission_files
 
 
@@ -89,52 +89,36 @@ def run_full_pipeline(config: PipelineConfig) -> dict:
     )
     
     # -------------------------------------------------------------
-    # Step 4: Test Data Loading & Normalization
+    # Step 4: Test Data Loading & Indexing
     # -------------------------------------------------------------
-    print("\n>>> STEP 4: Processing Test Data...")
-    df_s1_test, df_s2_test, df_s3_test = load_test_data(config)
-    df_s1_test = normalize_dataframe(df_s1_test)
-    df_s2_test = normalize_dataframe(df_s2_test)
-    df_s3_test = normalize_dataframe(df_s3_test)
+    print("\n>>> STEP 4: Processing Test Target Data (S2 & S3)...")
+    s2_test_path = os.path.join(config.TEST_DIR, "test_source2.tsv")
+    s3_test_path = os.path.join(config.TEST_DIR, "test_source3.tsv")
+    s1_test_path = os.path.join(config.TEST_DIR, "test_source1.tsv")
     
+    target_nrows = (config.SMOKE_SAMPLE_SIZE * 3) if config.LOCAL_SMOKE_TEST else None
+    from .data_loading import read_source_tsv
+    df_s2_test = normalize_dataframe(read_source_tsv(s2_test_path, nrows=target_nrows))
+    df_s3_test = normalize_dataframe(read_source_tsv(s3_test_path, nrows=target_nrows))
     df_targets_test = pd.concat([df_s2_test, df_s3_test], ignore_index=True)
     
-    # -------------------------------------------------------------
-    # Step 5: Test Blocking
-    # -------------------------------------------------------------
-    print("\n>>> STEP 5: Blocking on Test Data...")
+    print("\n>>> STEP 5: Building Candidate Index over Test Targets...")
     test_blocker = CandidateBlocker(config)
     test_blocker.build_index(df_targets_test)
-    test_candidates = test_blocker.generate_candidates(df_s1_test)
-    
-    s1_test_dict = {
-        row["entity_id"]: row.to_dict() for _, row in df_s1_test.iterrows()
-    }
-    target_test_dict = test_blocker.target_records
     
     # -------------------------------------------------------------
-    # Step 6: Batch Inference
+    # Step 6 & 7: Streaming Chunked Inference & TSV Generation
     # -------------------------------------------------------------
-    print("\n>>> STEP 6: Running Batch Inference on Test Set...")
-    final_candidates, final_matches = run_batch_inference(
+    print("\n>>> STEP 6 & 7: Streaming Test Inference & Generating Official TSVs...")
+    max_test_s1 = config.SMOKE_SAMPLE_SIZE if config.LOCAL_SMOKE_TEST else None
+    matching_path, candidate_path, total_s1_written, total_cands_written = stream_chunked_test_inference(
         model=model,
-        candidates_map=test_candidates,
-        s1_dict=s1_test_dict,
-        target_dict=target_test_dict,
         threshold=calibrated_threshold,
-        batch_size=500 if config.LOCAL_SMOKE_TEST else 2000
-    )
-    
-    # -------------------------------------------------------------
-    # Step 7: Output Submission Generation
-    # -------------------------------------------------------------
-    print("\n>>> STEP 7: Writing Submission TSVs...")
-    required_test_s1_ids = list(df_s1_test["entity_id"].values)
-    matching_path, candidate_path = write_submission_files(
-        required_s1_ids=required_test_s1_ids,
-        candidates_map=final_candidates,
-        matches_map=final_matches,
-        output_dir=config.OUTPUT_DIR
+        test_blocker=test_blocker,
+        s1_path=s1_test_path,
+        output_dir=config.OUTPUT_DIR,
+        chunk_size=1000 if config.LOCAL_SMOKE_TEST else 5000,
+        max_s1=max_test_s1
     )
     
     # -------------------------------------------------------------
@@ -154,7 +138,8 @@ def run_full_pipeline(config: PipelineConfig) -> dict:
         os.makedirs(smoke_dir, exist_ok=True)
         # Write minimal source files for validator to verify against
         cols = ["entity_id", "business_name", "business_address", "country"]
-        df_s1_test[cols].to_csv(os.path.join(smoke_dir, "test_source1.tsv"), sep="\t", index=False)
+        df_s1_smoke = read_source_tsv(s1_test_path, nrows=config.SMOKE_SAMPLE_SIZE)
+        df_s1_smoke[cols].to_csv(os.path.join(smoke_dir, "test_source1.tsv"), sep="\t", index=False)
         df_s2_test[cols].to_csv(os.path.join(smoke_dir, "test_source2.tsv"), sep="\t", index=False)
         df_s3_test[cols].to_csv(os.path.join(smoke_dir, "test_source3.tsv"), sep="\t", index=False)
         validation_test_dir = smoke_dir
